@@ -1,6 +1,6 @@
-import os
-key = input("Please enter OpenAI API Key")
-os.environ["OPENAI_API_KEY"] =key
+# import os
+# key = input("Please enter OpenAI API Key")
+# os.environ["OPENAI_API_KEY"] =key
 
 import streamlit as st
 from pdf_qa import PdfQA
