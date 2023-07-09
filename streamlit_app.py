@@ -1,93 +1,50 @@
-# import os
-# key = input("Please enter OpenAI API Key")
-# os.environ["OPENAI_API_KEY"] =key
-
 import streamlit as st
-from pdf_qa import PdfQA
-from pathlib import Path
-from tempfile import NamedTemporaryFile
-import time
-import shutil
-from constants import *
+from langchain.llms import OpenAI
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.chains import RetrievalQA
+from PyPDF2 import PdfReader
+from io import BytesIO
 
-# Streamlit app code
-st.set_page_config(
-    page_title='Q&A Bot for PDF',
-    page_icon='🔖',
-    layout='wide',
-    initial_sidebar_state='auto',
-)
+def generate_response(uploaded_file, openai_api_key, query_text):
+    # Load document if file is uploaded
+    if uploaded_file is not None:
+        # Read PDF file
+        pdf = PdfReader(uploaded_file)
+        documents = [page.extract_text() for page in pdf.pages]
+        # Split documents into chunks
+        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+        texts = text_splitter.create_documents(documents)
+        # Select embeddings
+        embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+        # Create a vectorstore from documents
+        db = Chroma.from_documents(texts, embeddings)
+        # Create retriever interface
+        retriever = db.as_retriever()
+        # Create QA chain
+        qa = RetrievalQA.from_chain_type(llm=OpenAI(openai_api_key=openai_api_key), chain_type='stuff', retriever=retriever)
+        return qa.run(query_text)
 
+# Page title
+st.set_page_config(page_title="ChatPDF App")
+st.title('ChatPDF App')
 
-if "pdf_qa_model" not in st.session_state:
-    st.session_state["pdf_qa_model"]:PdfQA = PdfQA() ## Intialisation
+# File upload
+uploaded_file = st.file_uploader('Upload an article', type='pdf')
+# Query text
+query_text = st.text_input('Enter your question:', placeholder = 'Please provide a short summary.', disabled=not uploaded_file)
 
-## To cache resource across multiple session 
-@st.cache_resource
-def load_llm(llm,load_in_8bit):
+# Form input and query
+result = []
+with st.form('myform', clear_on_submit=True):
+    openai_api_key = st.text_input('OpenAI API Key', type='password', disabled=not (uploaded_file and query_text))
+    submitted = st.form_submit_button('Submit', disabled=not(uploaded_file and query_text))
+    if submitted and openai_api_key.startswith('sk-'):
+        with st.spinner('Calculating...'):
+            response = generate_response(BytesIO(uploaded_file.read()), openai_api_key, query_text)
+            result.append(response)
+            del openai_api_key
 
-    if llm == LLM_OPENAI_GPT35:
-        pass
-    elif llm == LLM_FLAN_T5_SMALL:
-        return PdfQA.create_flan_t5_small(load_in_8bit)
-    elif llm == LLM_FLAN_T5_BASE:
-        return PdfQA.create_flan_t5_base(load_in_8bit)
-    elif llm == LLM_FLAN_T5_LARGE:
-        return PdfQA.create_flan_t5_large(load_in_8bit)
-    elif llm == LLM_FASTCHAT_T5_XL:
-        return PdfQA.create_fastchat_t5_xl(load_in_8bit)
-    elif llm == LLM_FALCON_SMALL:
-        return PdfQA.create_falcon_instruct_small(load_in_8bit)
-    else:
-        raise ValueError("Invalid LLM setting")
-
-## To cache resource across multiple session
-@st.cache_resource
-def load_emb(emb):
-    if emb == EMB_INSTRUCTOR_XL:
-        return PdfQA.create_instructor_xl()
-    elif emb == EMB_SBERT_MPNET_BASE:
-        return PdfQA.create_sbert_mpnet()
-    elif emb == EMB_SBERT_MINILM:
-        pass ##ChromaDB takes care
-    else:
-        raise ValueError("Invalid embedding setting")
-
-
-
-st.title("PDF Q&A (Self hosted LLMs)")
-
-with st.sidebar:
-    emb = st.radio("**Select Embedding Model**", [EMB_INSTRUCTOR_XL, EMB_SBERT_MPNET_BASE,EMB_SBERT_MINILM],index=1)
-    llm = st.radio("**Select LLM Model**", [LLM_FASTCHAT_T5_XL, LLM_FLAN_T5_SMALL,LLM_FLAN_T5_BASE,LLM_FLAN_T5_LARGE,LLM_FLAN_T5_XL,LLM_FALCON_SMALL],index=2)
-    load_in_8bit = st.radio("**Load 8 bit**", [True, False],index=1)
-    pdf_file = st.file_uploader("**Upload PDF**", type="pdf")
-
-    
-    if st.button("Submit") and pdf_file is not None:
-        with st.spinner(text="Uploading PDF and Generating Embeddings.."):
-            with NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                shutil.copyfileobj(pdf_file, tmp)
-                tmp_path = Path(tmp.name)
-                st.session_state["pdf_qa_model"].config = {
-                    "pdf_path": str(tmp_path),
-                    "embedding": emb,
-                    "llm": llm,
-                    "load_in_8bit": load_in_8bit
-                }
-                st.session_state["pdf_qa_model"].embedding = load_emb(emb)
-                st.session_state["pdf_qa_model"].llm = load_llm(llm,load_in_8bit)        
-                st.session_state["pdf_qa_model"].init_embeddings()
-                st.session_state["pdf_qa_model"].init_models()
-                st.session_state["pdf_qa_model"].vector_db_pdf()
-                st.sidebar.success("PDF uploaded successfully")
-
-question = st.text_input('Ask a question', 'What is this document?')
-
-if st.button("Answer"):
-    try:
-        st.session_state["pdf_qa_model"].retreival_qa_chain()
-        answer = st.session_state["pdf_qa_model"].answer_query(question)
-        st.write(f"{answer}")
-    except Exception as e:
-        st.error(f"Error answering the question: {str(e)}")
+if len(result):
+    st.info(response)
